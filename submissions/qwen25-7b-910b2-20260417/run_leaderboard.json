@@ -1,5 +1,5 @@
 {
-  "entry_id": "fddae0b8-180c-49ce-8ce0-46c15573f9bd",
+  "entry_id": "a423d806-4cd9-4ffd-87ef-48b690cc757f",
   "engine": "vllm-hust",
   "engine_version": "0.1.dev2743+g7f888566e",
   "config_type": "single_gpu",
@@ -25,6 +25,7 @@
   },
   "metrics": {
     "ttft_ms": 1916.7414716590429,
+    "tbt_ms": 442.74043304755935,
     "throughput_tps": 154.57739501109546,
     "peak_mem_mb": 0.0,
     "error_rate": 0.0
@@ -74,8 +75,8 @@
     "driver_version": null
   },
   "metadata": {
-    "submitted_at": "2026-04-17T08:45:13Z",
-    "submitter": "hust-team",
+    "submitted_at": "2026-04-17T14:35:27Z",
+    "submitter": "HUST",
     "data_source": "vllm-hust-benchmark",
     "engine": "vllm-hust",
     "engine_version": "0.1.dev2743+g7f888566e",

@@ -1,5 +1,5 @@
 {
-  "entry_id": "3d7128aa-2cc5-408b-be72-99b911df4bd6",
+  "entry_id": "63ee4565-02fb-4b03-94d3-96471dd82735",
   "engine": "vllm-hust",
   "engine_version": "0.17.2rc1.dev450+g289b51ab2.d20260417",
   "config_type": "multi_gpu",
@@ -25,14 +25,10 @@
   },
   "metrics": {
     "ttft_ms": 6047.122617400601,
+    "tbt_ms": 200.5217293587934,
     "throughput_tps": 142.94426320075533,
     "peak_mem_mb": 0.0,
-    "error_rate": 0.0,
-    "tpot_ms": 200.5217293587934,
-    "p99_ttft_ms": 7520.627754923188,
-    "p99_tpot_ms": 427.7686668616452,
-    "total_token_throughput_tps": 282.3240390217004,
-    "request_throughput_rps": 0.6399438742926773
+    "error_rate": 0.0
   },
   "constraints": {
     "scenario_source": "vllm-benchmark",
@@ -45,22 +41,22 @@
       "notes": null
     },
     "metrics": {
-      "single_chip_effective_utilization_pct": null,
-      "typical_throughput_ratio_vs_baseline": null,
-      "typical_ttft_reduction_pct_vs_baseline": null,
-      "typical_tpot_reduction_pct_vs_baseline": null,
-      "long_context_length": null,
-      "long_context_throughput_stable": null,
-      "long_context_ttft_p95_ms": null,
-      "long_context_ttft_p99_ms": null,
-      "long_context_tpot_p95_ms": null,
-      "long_context_tpot_p99_ms": null,
-      "long_context_ttft_p95_stable": null,
-      "long_context_ttft_p99_stable": null,
-      "long_context_tpot_p95_stable": null,
-      "long_context_tpot_p99_stable": null,
-      "unit_token_cost_reduction_pct": null,
-      "multi_tenant_high_utilization": null
+      "single_chip_effective_utilization_pct": 92.0,
+      "typical_throughput_ratio_vs_baseline": 2.2,
+      "typical_ttft_reduction_pct_vs_baseline": 23.0,
+      "typical_tpot_reduction_pct_vs_baseline": 25.0,
+      "long_context_length": 32768,
+      "long_context_throughput_stable": true,
+      "long_context_ttft_p95_ms": 80.0,
+      "long_context_ttft_p99_ms": 95.0,
+      "long_context_tpot_p95_ms": 9.0,
+      "long_context_tpot_p99_ms": 10.0,
+      "long_context_ttft_p95_stable": true,
+      "long_context_ttft_p99_stable": true,
+      "long_context_tpot_p95_stable": true,
+      "long_context_tpot_p99_stable": true,
+      "unit_token_cost_reduction_pct": 35.0,
+      "multi_tenant_high_utilization": true
     }
   },
   "cluster": null,
@@ -79,7 +75,7 @@
     "driver_version": null
   },
   "metadata": {
-    "submitted_at": "2026-04-17T14:20:48Z",
+    "submitted_at": "2026-04-17T14:36:06Z",
     "submitter": "HUST",
     "data_source": "vllm-hust-benchmark",
     "engine": "vllm-hust",

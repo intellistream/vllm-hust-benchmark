@@ -115,6 +115,13 @@ def _derive_metrics_from_benchmark_result(
         if avg_latency_seconds is not None:
             mean_ttft_ms = avg_latency_seconds * 1000.0
 
+    mean_tbt_ms = (
+        _safe_float(payload.get("mean_tpot_ms"))
+        or _safe_float(payload.get("mean_tbt_ms"))
+        or _safe_float(payload.get("tpot_ms"))
+        or _safe_float(payload.get("tbt_ms"))
+    )
+
     throughput_tps = (
         _safe_float(payload.get("output_throughput"))
         or _safe_float(payload.get("tokens_per_second"))
@@ -131,6 +138,7 @@ def _derive_metrics_from_benchmark_result(
 
     metrics = {
         "ttft_ms": float(mean_ttft_ms or 0.0),
+        "tbt_ms": float(mean_tbt_ms) if mean_tbt_ms is not None else None,
         "throughput_tps": float(throughput_tps),
         "peak_mem_mb": float(peak_mem_mb or payload.get("peak_mem_mb") or 0.0),
         "error_rate": float(error_rate),
