@@ -7,6 +7,7 @@ from pathlib import Path
 
 from vllm_hust_benchmark.integration import (
     aggregate_to_website,
+    upload_to_huggingface,
     build_benchmark_script_command,
     build_performance_suite_command,
     build_vllm_bench_command,
@@ -182,7 +183,83 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     publish_parser.add_argument("--source-dir", required=True)
     publish_parser.add_argument("--output-dir")
+    publish_parser.add_argument("--publish-hf", action="store_true",
+        help="After aggregation, also upload data files to HuggingFace dataset repo.")
+    publish_parser.add_argument("--hf-repo",
+        help="HuggingFace dataset repo in 'owner/name' format (required with --publish-hf).")
+    publish_parser.add_argument("--hf-token", help="HF write token (falls back to cached login).")
+    publish_parser.add_argument("--hf-branch", default="main", help="Target HF branch.")
+    publish_parser.add_argument("--hf-commit-message", default="chore: update leaderboard data")
+    publish_parser.add_argument("--hf-dry-run", action="store_true",
+        help="Print what would be uploaded without actually calling the HF API.")
     publish_parser.add_argument("--execute", action="store_true")
+
+    publish_hf_parser = subparsers.add_parser(
+        "publish-hf",
+        help="Upload aggregated leaderboard data from vllm-hust-website/data to HuggingFace.",
+    )
+    publish_hf_parser.add_argument(
+        "--data-dir",
+        help="Directory with aggregated JSON files (default: <website_repo>/data).",
+    )
+    publish_hf_parser.add_argument(
+        "--repo-id", required=True,
+        help="HuggingFace dataset repo in 'owner/name' format.",
+    )
+    publish_hf_parser.add_argument("--token", help="HF write token (falls back to cached login).")
+    publish_hf_parser.add_argument("--branch", default="main", help="Target HF branch.")
+    publish_hf_parser.add_argument(
+        "--commit-message", default="chore: update leaderboard data",
+    )
+    publish_hf_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Print what would be uploaded without calling the HF API.",
+    )
+    publish_hf_parser.add_argument(
+        "--aggregate-first", action="store_true",
+        help="Run publish-website aggregation from --source-dir before uploading.",
+    )
+    publish_hf_parser.add_argument(
+        "--source-dir",
+        help="Artifact source dir for --aggregate-first (default: <website_repo>/data).",
+    )
+    publish_hf_parser.add_argument("--execute", action="store_true")
+
+    submit_parser = subparsers.add_parser(
+        "submit",
+        help="Export benchmark artifact and place it in submissions/ for GitHub CI to upload to HF.",
+    )
+    submit_parser.add_argument("scenario", help="Scenario name (e.g. sharegpt-online).")
+    submit_parser.add_argument("--metrics-file", help="Path to metrics payload JSON.")
+    submit_parser.add_argument("--benchmark-result-file")
+    submit_parser.add_argument("--constraints-file")
+    submit_parser.add_argument("--run-id", required=True, help="Unique run identifier (used as sub-directory name).")
+    submit_parser.add_argument("--engine", required=True)
+    submit_parser.add_argument("--engine-version", required=True)
+    submit_parser.add_argument("--model-name", required=True)
+    submit_parser.add_argument("--model-parameters", default="7B")
+    submit_parser.add_argument("--model-precision", default="BF16")
+    submit_parser.add_argument("--hardware-vendor", default="Huawei")
+    submit_parser.add_argument("--hardware-chip-model", required=True)
+    submit_parser.add_argument("--chip-count", type=int, default=1)
+    submit_parser.add_argument("--node-count", type=int, default=1)
+    submit_parser.add_argument("--submitter", required=True)
+    submit_parser.add_argument("--baseline-engine", default="vllm")
+    submit_parser.add_argument("--domestic-chip-class", default="Ascend-class")
+    submit_parser.add_argument("--representative-model-band", default="7B-13B")
+    submit_parser.add_argument("--data-source", default="vllm-hust-benchmark")
+    submit_parser.add_argument("--input-length", type=int)
+    submit_parser.add_argument("--output-length", type=int)
+    submit_parser.add_argument("--batch-size", type=int)
+    submit_parser.add_argument("--concurrent-requests", type=int)
+    submit_parser.add_argument("--protocol-version", default="N/A")
+    submit_parser.add_argument("--backend-version", default="N/A")
+    submit_parser.add_argument("--core-version", default="N/A")
+    submit_parser.add_argument("--peak-mem-mb", type=float)
+    submit_parser.add_argument(
+        "--submissions-dir",
+        help="Root submissions directory (default: <benchmark_repo>/submissions).",
+    )
 
     return parser
 
@@ -441,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             validate_repo_layout(layout)
             output_dir = Path(args.output_dir).resolve() if args.output_dir else None
-            return aggregate_to_website(
+            rc = aggregate_to_website(
                 layout=layout,
                 source_dir=Path(args.source_dir).resolve(),
                 output_dir=output_dir,
@@ -450,6 +527,122 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as error:
             print(str(error), file=sys.stderr)
             return 2
+        if rc != 0:
+            return rc
+        if getattr(args, "publish_hf", False):
+            if not getattr(args, "hf_repo", None):
+                print("--hf-repo is required when --publish-hf is set", file=sys.stderr)
+                return 2
+            data_dir = output_dir or layout.website_repo / "data"
+            return upload_to_huggingface(
+                data_dir=data_dir,
+                repo_id=args.hf_repo,
+                token=getattr(args, "hf_token", None),
+                branch=getattr(args, "hf_branch", "main"),
+                commit_message=getattr(args, "hf_commit_message", "chore: update leaderboard data"),
+                dry_run=getattr(args, "hf_dry_run", False),
+            )
+        return rc
+
+    if args.command == "publish-hf":
+        layout = resolve_repo_layout()
+        try:
+            validate_repo_layout(layout)
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        # Optionally aggregate first
+        if getattr(args, "aggregate_first", False):
+            source_dir = (
+                Path(args.source_dir).resolve()
+                if getattr(args, "source_dir", None)
+                else layout.website_repo / "data"
+            )
+            rc = aggregate_to_website(
+                layout=layout,
+                source_dir=source_dir,
+                output_dir=None,
+                execute=args.execute,
+            )
+            if rc != 0:
+                return rc
+        data_dir = (
+            Path(args.data_dir).resolve()
+            if getattr(args, "data_dir", None)
+            else layout.website_repo / "data"
+        )
+        return upload_to_huggingface(
+            data_dir=data_dir,
+            repo_id=args.repo_id,
+            token=getattr(args, "token", None),
+            branch=getattr(args, "branch", "main"),
+            commit_message=getattr(args, "commit_message", "chore: update leaderboard data"),
+            dry_run=getattr(args, "dry_run", False),
+        )
+
+    if args.command == "submit":
+        scenario = get_scenario(args.scenario)
+        layout = resolve_repo_layout()
+        # submissions/<run-id>/ inside the benchmark repo
+        submissions_root = (
+            Path(args.submissions_dir).resolve()
+            if getattr(args, "submissions_dir", None)
+            else layout.benchmark_repo / "submissions"
+        )
+        output_dir = submissions_root / args.run_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        metrics_file = Path(args.metrics_file).resolve() if args.metrics_file else None
+        benchmark_result_file = (
+            Path(args.benchmark_result_file).resolve() if args.benchmark_result_file else None
+        )
+        constraints_file = (
+            Path(args.constraints_file).resolve() if args.constraints_file else None
+        )
+        try:
+            artifact_path, manifest_path = export_leaderboard_artifacts(
+                scenario=scenario,
+                metrics_file=metrics_file,
+                benchmark_result_file=benchmark_result_file,
+                constraints_file=constraints_file,
+                output_dir=output_dir,
+                artifact_name="run_leaderboard.json",
+                run_id=args.run_id,
+                engine=args.engine,
+                engine_version=args.engine_version,
+                model_name=args.model_name,
+                model_parameters=args.model_parameters,
+                model_precision=args.model_precision,
+                hardware_vendor=args.hardware_vendor,
+                hardware_chip_model=args.hardware_chip_model,
+                chip_count=args.chip_count,
+                node_count=args.node_count,
+                submitter=args.submitter,
+                baseline_engine=args.baseline_engine,
+                domestic_chip_class=args.domestic_chip_class,
+                representative_model_band=args.representative_model_band,
+                data_source=args.data_source,
+                input_length=args.input_length,
+                output_length=args.output_length,
+                batch_size=args.batch_size,
+                concurrent_requests=args.concurrent_requests,
+                protocol_version=args.protocol_version,
+                backend_version=args.backend_version,
+                core_version=args.core_version,
+                peak_mem_mb=args.peak_mem_mb,
+            )
+        except (OSError, ValueError) as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        print(f"artifact : {artifact_path}")
+        print(f"manifest : {manifest_path}")
+        print(f"")
+        print(f"Next steps:")
+        print(f"  git add {output_dir.relative_to(layout.benchmark_repo)}/")
+        print(f"  git commit -m \"feat: add benchmark result {args.run_id}\"")
+        print(f"  git push")
+        print(f"  → GitHub Actions will aggregate and upload to HuggingFace automatically.")
+        return 0
 
     if args.command == "bench":
         layout = resolve_repo_layout()
