@@ -276,3 +276,38 @@ def aggregate_to_website(
         str(destination),
     ]
     return run_external_command(command, cwd=layout.website_repo, execute=execute)
+
+
+def upload_to_huggingface(
+    *,
+    data_dir: Path,
+    repo_id: str,
+    token: str | None = None,
+    branch: str = "main",
+    path_in_repo_prefix: str = "",
+    commit_message: str = "chore: update leaderboard data",
+    dry_run: bool = False,
+) -> int:
+    """Upload aggregated leaderboard JSON files to a HuggingFace dataset repo.
+
+    Returns 0 on success, non-zero on failure.
+    """
+    from vllm_hust_benchmark.hf_publisher import upload_leaderboard_to_hf
+
+    try:
+        upload_leaderboard_to_hf(
+            data_dir=data_dir,
+            repo_id=repo_id,
+            token=token,
+            branch=branch,
+            path_in_repo_prefix=path_in_repo_prefix,
+            commit_message=commit_message,
+            dry_run=dry_run,
+        )
+        return 0
+    except (FileNotFoundError, ImportError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001
+        print(f"HF upload failed: {exc}", file=sys.stderr)
+        return 1

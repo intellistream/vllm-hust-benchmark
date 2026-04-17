@@ -1,0 +1,91 @@
+name: Upload Benchmark Results to HuggingFace
+
+# 任何分支 push，只要 submissions/ 下有变更就触发
+on:
+  push:
+    paths:
+      - 'submissions/**'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run only (do not upload to HF)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  upload-to-hf:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -e ".[publish]" jsonschema
+
+      - name: Validate all submission artifacts
+        run: |
+          python - << 'PYEOF'
+          import json, sys
+          from pathlib import Path
+          from jsonschema import Draft7Validator
+
+          schema_path = Path("data/schemas/leaderboard_v1.schema.json")
+          if not schema_path.exists():
+              print("No local schema — skipping schema validation")
+              sys.exit(0)
+
+          schema = json.loads(schema_path.read_text())
+          validator = Draft7Validator(schema)
+          errors_found = False
+
+          manifests = sorted(Path("submissions").rglob("leaderboard_manifest.json"))
+          if not manifests:
+              print("No submission manifests found — nothing to do")
+              sys.exit(0)
+
+          for manifest_path in manifests:
+              artifact_path = manifest_path.parent / "run_leaderboard.json"
+              if not artifact_path.exists():
+                  print(f"WARNING: manifest present but artifact missing: {artifact_path}")
+                  continue
+              artifact = json.loads(artifact_path.read_text())
+              errs = sorted(validator.iter_errors(artifact), key=lambda e: list(e.path))
+              if errs:
+                  print(f"FAIL {artifact_path}: {errs[0].message[:120]} @ {list(errs[0].path)}")
+                  errors_found = True
+              else:
+                  print(f"OK   {artifact_path}")
+
+          sys.exit(1 if errors_found else 0)
+          PYEOF
+
+      - name: Upload to HuggingFace
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python -m vllm_hust_benchmark.cli publish-hf \
+            --repo-id intellistream/vllm-hust-benchmark-results \
+            --aggregate-first \
+            --source-dir submissions \
+            --commit-message "chore: update leaderboard from ${GITHUB_REF} @ ${GITHUB_SHA:0:8}" \
+            --execute
+
+      - name: Dry run summary
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: |
+          python -m vllm_hust_benchmark.cli publish-hf \
+            --repo-id intellistream/vllm-hust-benchmark-results \
+            --aggregate-first \
+            --source-dir submissions \
+            --dry-run \
+            --execute
