@@ -88,18 +88,18 @@ jobs:
       - name: Upload to HuggingFace
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DATASET_WRITE_TOKEN: ${{ secrets.DATASET_WRITE_TOKEN }}
         run: |
           python - << 'PYEOF'
           import os, sys
           from pathlib import Path
           from huggingface_hub import HfApi, CommitOperationAdd
 
-          token = os.environ.get("HF_TOKEN")
+          token = os.environ.get("DATASET_WRITE_TOKEN")
           if not token:
-              print("ERROR: HF_TOKEN secret is not set.")
+              print("ERROR: DATASET_WRITE_TOKEN secret is not set.")
               print("Go to: GitHub repo → Settings → Secrets → Actions → New secret")
-              print("Name: HF_TOKEN, Value: your HuggingFace write token")
+              print("Name: DATASET_WRITE_TOKEN, Value: your HuggingFace write token")
               sys.exit(1)
 
           repo_id = "intellistream/vllm-hust-benchmark-results"
