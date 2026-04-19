@@ -7,7 +7,7 @@ name = "vllm-hust-benchmark"
 description = "Independent benchmark harness mirroring upstream vLLM benchmark entrypoints and scenario structure."
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 authors = [
   {name = "IntelliStream Team"}
 ]

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        env:
+          HOME: ${{ github.workspace }}/.ci-home
+          XDG_CACHE_HOME: ${{ github.workspace }}/.ci-home/.cache
+          XDG_CONFIG_HOME: ${{ github.workspace }}/.ci-home/.config
+        run: |
+          mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME"
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+
+      - name: Run pytest
+        env:
+          HOME: ${{ github.workspace }}/.ci-home
+          XDG_CACHE_HOME: ${{ github.workspace }}/.ci-home/.cache
+          XDG_CONFIG_HOME: ${{ github.workspace }}/.ci-home/.config
+        run: python -m pytest -q tests --junitxml=pytest-results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vllm-hust-benchmark-pytest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: pytest-results.xml
+          if-no-files-found: warn
+          retention-days: 14
