@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -8,6 +10,7 @@ from pathlib import Path
 from vllm_hust_benchmark.integration import (
     aggregate_to_website,
     upload_to_huggingface,
+    sync_submission_to_huggingface,
     build_benchmark_script_command,
     build_performance_suite_command,
     build_vllm_bench_command,
@@ -55,6 +58,75 @@ def _parse_set_arguments(values: list[str] | None) -> dict[str, object]:
         normalized_key = key.strip().replace("-", "_")
         parsed[normalized_key] = _parse_override_value(value)
     return parsed
+
+
+def _load_github_event_payload() -> dict[str, object]:
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    if not event_path:
+        return {}
+    try:
+        return json.loads(Path(event_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _coerce_optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_github_metadata(args: argparse.Namespace) -> dict[str, object | None]:
+    event_payload = _load_github_event_payload()
+    pull_request = event_payload.get("pull_request")
+    if not isinstance(pull_request, dict):
+        pull_request = {}
+
+    repository = getattr(args, "github_repository", None) or os.environ.get(
+        "GITHUB_REPOSITORY"
+    )
+    server_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    git_commit = getattr(args, "git_commit", None) or os.environ.get("GITHUB_SHA")
+    github_user = getattr(args, "github_user", None) or os.environ.get("GITHUB_ACTOR")
+    github_ref = (
+        getattr(args, "github_ref", None)
+        or os.environ.get("GITHUB_HEAD_REF")
+        or os.environ.get("GITHUB_REF_NAME")
+    )
+    github_event_name = getattr(args, "github_event_name", None) or os.environ.get(
+        "GITHUB_EVENT_NAME"
+    )
+    github_pr_number = _coerce_optional_int(getattr(args, "github_pr_number", None))
+    if github_pr_number is None:
+        github_pr_number = _coerce_optional_int(pull_request.get("number"))
+    if github_pr_number is None and github_event_name in {"pull_request", "pull_request_target"}:
+        github_pr_number = _coerce_optional_int(event_payload.get("number"))
+
+    github_commit_url = getattr(args, "github_commit_url", None)
+    if github_commit_url is None and repository and git_commit:
+        github_commit_url = f"{server_url}/{repository}/commit/{git_commit}"
+
+    github_pr_url = getattr(args, "github_pr_url", None)
+    if github_pr_url is None:
+        pull_request_url = pull_request.get("html_url")
+        if isinstance(pull_request_url, str) and pull_request_url:
+            github_pr_url = pull_request_url
+        elif repository and github_pr_number is not None:
+            github_pr_url = f"{server_url}/{repository}/pull/{github_pr_number}"
+
+    return {
+        "git_commit": git_commit,
+        "github_user": github_user,
+        "github_commit_url": github_commit_url,
+        "github_repository": repository,
+        "github_ref": github_ref,
+        "github_event_name": github_event_name,
+        "github_pr_number": github_pr_number,
+        "github_pr_url": github_pr_url,
+    }
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -173,6 +245,14 @@ def _build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--backend-version", default="N/A")
     export_parser.add_argument("--core-version", default="N/A")
     export_parser.add_argument("--peak-mem-mb", type=float)
+    export_parser.add_argument("--git-commit")
+    export_parser.add_argument("--github-user")
+    export_parser.add_argument("--github-commit-url")
+    export_parser.add_argument("--github-repository")
+    export_parser.add_argument("--github-ref")
+    export_parser.add_argument("--github-event-name")
+    export_parser.add_argument("--github-pr-number", type=int)
+    export_parser.add_argument("--github-pr-url")
     export_parser.add_argument("--publish-website", action="store_true")
     export_parser.add_argument("--website-output-dir")
     export_parser.add_argument("--execute", action="store_true")
@@ -225,6 +305,23 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     publish_hf_parser.add_argument("--execute", action="store_true")
 
+    sync_submission_parser = subparsers.add_parser(
+        "sync-submission-to-hf",
+        help="Merge one generated submission with HF-hosted historical submissions, regenerate leaderboard snapshots, and upload both raw submission and snapshots.",
+    )
+    sync_submission_parser.add_argument("--submission-dir", required=True)
+    sync_submission_parser.add_argument("--aggregate-output-dir", required=True)
+    sync_submission_parser.add_argument("--repo-id", required=True)
+    sync_submission_parser.add_argument("--token")
+    sync_submission_parser.add_argument("--branch", default="main")
+    sync_submission_parser.add_argument("--submissions-prefix", default="submissions-auto")
+    sync_submission_parser.add_argument(
+        "--commit-message",
+        default="chore: sync benchmark submission and leaderboard data",
+    )
+    sync_submission_parser.add_argument("--dry-run", action="store_true")
+    sync_submission_parser.add_argument("--execute", action="store_true")
+
     submit_parser = subparsers.add_parser(
         "submit",
         help="Export benchmark artifact and place it in submissions/ for GitHub CI to upload to HF.",
@@ -256,6 +353,14 @@ def _build_parser() -> argparse.ArgumentParser:
     submit_parser.add_argument("--backend-version", default="N/A")
     submit_parser.add_argument("--core-version", default="N/A")
     submit_parser.add_argument("--peak-mem-mb", type=float)
+    submit_parser.add_argument("--git-commit")
+    submit_parser.add_argument("--github-user")
+    submit_parser.add_argument("--github-commit-url")
+    submit_parser.add_argument("--github-repository")
+    submit_parser.add_argument("--github-ref")
+    submit_parser.add_argument("--github-event-name")
+    submit_parser.add_argument("--github-pr-number", type=int)
+    submit_parser.add_argument("--github-pr-url")
     submit_parser.add_argument(
         "--submissions-dir",
         help="Root submissions directory (default: <benchmark_repo>/submissions).",
@@ -446,6 +551,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "export-leaderboard-artifact":
         scenario = get_scenario(args.scenario)
+        github_metadata = _resolve_github_metadata(args)
         metrics_file = Path(args.metrics_file).resolve() if args.metrics_file else None
         benchmark_result_file = (
             Path(args.benchmark_result_file).resolve()
@@ -486,6 +592,14 @@ def main(argv: list[str] | None = None) -> int:
                 backend_version=args.backend_version,
                 core_version=args.core_version,
                 peak_mem_mb=args.peak_mem_mb,
+                git_commit=github_metadata["git_commit"],
+                github_user=github_metadata["github_user"],
+                github_commit_url=github_metadata["github_commit_url"],
+                github_repository=github_metadata["github_repository"],
+                github_ref=github_metadata["github_ref"],
+                github_event_name=github_metadata["github_event_name"],
+                github_pr_number=github_metadata["github_pr_number"],
+                github_pr_url=github_metadata["github_pr_url"],
             )
         except (OSError, ValueError) as error:
             print(str(error), file=sys.stderr)
@@ -580,9 +694,39 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=getattr(args, "dry_run", False),
         )
 
+    if args.command == "sync-submission-to-hf":
+        layout = resolve_repo_layout()
+        try:
+            validate_repo_layout(layout)
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        if not args.execute:
+            print(
+                "sync-submission-to-hf requires --execute because it regenerates local snapshots before upload",
+                file=sys.stderr,
+            )
+            return 2
+        return sync_submission_to_huggingface(
+            layout=layout,
+            submission_dir=Path(args.submission_dir).resolve(),
+            aggregate_output_dir=Path(args.aggregate_output_dir).resolve(),
+            repo_id=args.repo_id,
+            token=getattr(args, "token", None),
+            branch=getattr(args, "branch", "main"),
+            submissions_prefix=getattr(args, "submissions_prefix", "submissions-auto"),
+            commit_message=getattr(
+                args,
+                "commit_message",
+                "chore: sync benchmark submission and leaderboard data",
+            ),
+            dry_run=getattr(args, "dry_run", False),
+        )
+
     if args.command == "submit":
         scenario = get_scenario(args.scenario)
         layout = resolve_repo_layout()
+        github_metadata = _resolve_github_metadata(args)
         # submissions/<run-id>/ inside the benchmark repo
         submissions_root = (
             Path(args.submissions_dir).resolve()
@@ -630,6 +774,14 @@ def main(argv: list[str] | None = None) -> int:
                 backend_version=args.backend_version,
                 core_version=args.core_version,
                 peak_mem_mb=args.peak_mem_mb,
+                git_commit=github_metadata["git_commit"],
+                github_user=github_metadata["github_user"],
+                github_commit_url=github_metadata["github_commit_url"],
+                github_repository=github_metadata["github_repository"],
+                github_ref=github_metadata["github_ref"],
+                github_event_name=github_metadata["github_event_name"],
+                github_pr_number=github_metadata["github_pr_number"],
+                github_pr_url=github_metadata["github_pr_url"],
             )
         except (OSError, ValueError) as error:
             print(str(error), file=sys.stderr)

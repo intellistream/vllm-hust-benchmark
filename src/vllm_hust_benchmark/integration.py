@@ -6,6 +6,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -336,3 +337,133 @@ def upload_to_huggingface(
     except Exception as exc:  # noqa: BLE001
         print(f"HF upload failed: {exc}", file=sys.stderr)
         return 1
+
+
+def _resolve_hf_token(token: str | None) -> str | None:
+    return token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
+
+def sync_submission_to_huggingface(
+    *,
+    layout: RepoLayout,
+    submission_dir: Path,
+    aggregate_output_dir: Path,
+    repo_id: str,
+    token: str | None = None,
+    branch: str = "main",
+    submissions_prefix: str = "submissions-auto",
+    commit_message: str = "chore: sync benchmark submission and leaderboard data",
+    dry_run: bool = False,
+) -> int:
+    try:
+        from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
+    except ImportError:
+        print(
+            "huggingface_hub is required for HF submission sync. Install with: "
+            "pip install 'vllm-hust-benchmark[publish]'",
+            file=sys.stderr,
+        )
+        return 2
+
+    if not submission_dir.is_dir():
+        print(f"submission directory not found: {submission_dir}", file=sys.stderr)
+        return 2
+
+    resolved_token = _resolve_hf_token(token)
+    api = HfApi(token=resolved_token)
+    normalized_prefix = submissions_prefix.strip("/")
+    repo_prefix = f"{normalized_prefix}/" if normalized_prefix else ""
+
+    with tempfile.TemporaryDirectory(prefix="vllm-hust-hf-sync-") as temp_dir:
+        temp_root = Path(temp_dir)
+        merged_root = temp_root / "merged_submissions"
+        merged_source_dir = merged_root / normalized_prefix if normalized_prefix else merged_root
+        merged_source_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            repo_files = api.list_repo_files(
+                repo_id=repo_id,
+                repo_type="dataset",
+                revision=branch,
+            )
+        except Exception:
+            repo_files = []
+
+        for repo_path in repo_files:
+            if repo_prefix and not repo_path.startswith(repo_prefix):
+                continue
+            local_path = merged_root / repo_path
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            downloaded_path = hf_hub_download(
+                repo_id=repo_id,
+                repo_type="dataset",
+                filename=repo_path,
+                revision=branch,
+                token=resolved_token,
+            )
+            shutil.copy2(downloaded_path, local_path)
+
+        current_submission_target = merged_source_dir / submission_dir.name
+        shutil.copytree(submission_dir, current_submission_target, dirs_exist_ok=True)
+
+        aggregate_rc = aggregate_to_website(
+            layout=layout,
+            source_dir=merged_source_dir,
+            output_dir=aggregate_output_dir,
+            execute=True,
+        )
+        if aggregate_rc != 0:
+            return aggregate_rc
+
+        aggregate_files = [
+            "leaderboard_single.json",
+            "leaderboard_multi.json",
+            "leaderboard_compare.json",
+            "last_updated.json",
+        ]
+        operations: list[CommitOperationAdd] = []
+        planned_paths: list[str] = []
+
+        for file_name in aggregate_files:
+            local_file = aggregate_output_dir / file_name
+            if not local_file.is_file():
+                print(f"missing aggregated output: {local_file}", file=sys.stderr)
+                return 2
+            operations.append(
+                CommitOperationAdd(path_in_repo=file_name, path_or_fileobj=local_file)
+            )
+            planned_paths.append(file_name)
+
+        for local_file in sorted(current_submission_target.rglob("*")):
+            if not local_file.is_file():
+                continue
+            relative_path = local_file.relative_to(current_submission_target).as_posix()
+            repo_path = "/".join(
+                part
+                for part in [normalized_prefix, submission_dir.name, relative_path]
+                if part
+            )
+            operations.append(
+                CommitOperationAdd(path_in_repo=repo_path, path_or_fileobj=local_file)
+            )
+            planned_paths.append(repo_path)
+
+        if dry_run:
+            print(f"[dry-run] Would upload {len(planned_paths)} file(s) to {repo_id}@{branch}:")
+            for repo_path in planned_paths:
+                print(f"  {repo_path}")
+            return 0
+
+        try:
+            api.repo_info(repo_id=repo_id, repo_type="dataset")
+        except Exception:
+            api.create_repo(repo_id=repo_id, repo_type="dataset", private=True, exist_ok=True)
+
+        api.create_commit(
+            repo_id=repo_id,
+            repo_type="dataset",
+            branch=branch,
+            operations=operations,
+            commit_message=commit_message,
+        )
+        return 0

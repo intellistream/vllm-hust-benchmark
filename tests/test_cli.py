@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -307,12 +308,22 @@ def test_export_leaderboard_artifact(tmp_path) -> None:
             "Ascend-910B",
             "--submitter",
             "ci",
+            "--git-commit",
+            "abc123def456",
+            "--github-user",
+            "octocat",
+            "--github-repository",
+            "vLLM-HUST/vllm-hust",
         ]
     )
 
     assert exit_code == 0
     assert (output_dir / "run_leaderboard.json").is_file()
     assert (output_dir / "leaderboard_manifest.json").is_file()
+    artifact = json.loads((output_dir / "run_leaderboard.json").read_text(encoding="utf-8"))
+    assert artifact["metadata"]["git_commit"] == "abc123def456"
+    assert artifact["metadata"]["github_user"] == "octocat"
+    assert artifact["metadata"]["github_commit_url"] == "https://github.com/vLLM-HUST/vllm-hust/commit/abc123def456"
 
 
 def test_export_leaderboard_artifact_from_raw_benchmark_result(tmp_path) -> None:
@@ -382,12 +393,16 @@ def test_export_leaderboard_artifact_from_raw_benchmark_result(tmp_path) -> None
             "Ascend-910B",
             "--submitter",
             "ci",
+            "--github-user",
+            "benchmark-bot",
         ]
     )
 
     assert exit_code == 0
     assert (output_dir / "run_leaderboard.json").is_file()
     assert (output_dir / "leaderboard_manifest.json").is_file()
+    artifact = json.loads((output_dir / "run_leaderboard.json").read_text(encoding="utf-8"))
+    assert artifact["metadata"]["github_user"] == "benchmark-bot"
 
 
 
