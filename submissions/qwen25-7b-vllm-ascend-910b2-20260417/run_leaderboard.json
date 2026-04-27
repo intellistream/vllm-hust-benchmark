@@ -1,6 +1,6 @@
 {
   "entry_id": "210b1171-0982-403e-849e-f19d45d2d3cc",
-  "engine": "vllm-ascend",
+  "engine": "vllm-hust",
   "engine_version": "0.17.2rc1.dev450+g289b51ab2.d20260417",
   "config_type": "single_gpu",
   "hardware": {
@@ -77,7 +77,7 @@
     "submitted_at": "2026-04-17T07:15:37Z",
     "submitter": "HUST",
     "data_source": "vllm-hust-benchmark",
-    "engine": "vllm-ascend",
+    "engine": "vllm-hust",
     "engine_version": "0.17.2rc1.dev450+g289b51ab2.d20260417",
     "reproducible_cmd": null,
     "git_commit": null,
