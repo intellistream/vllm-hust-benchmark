@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout benchmark repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Checkout website repo (for aggregate script and schema)
         uses: actions/checkout@v4
@@ -35,7 +37,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install jsonschema "huggingface_hub>=0.20"
+        run: pip install -e . jsonschema "huggingface_hub>=0.20"
 
       - name: Validate all submission artifacts
         run: |
@@ -74,67 +76,89 @@ jobs:
           sys.exit(1 if errors_found else 0)
           PYEOF
 
-      - name: Aggregate submissions into leaderboard JSON
-        run: |
-          python vllm-hust-website/scripts/aggregate_results.py \
-            --source-dir submissions \
-            --output-dir /tmp/leaderboard-data
-
-      - name: Show aggregated stats
-        run: |
-          echo "Single entries: $(python -c "import json; print(len(json.load(open('/tmp/leaderboard-data/leaderboard_single.json'))))")"
-          echo "Multi  entries: $(python -c "import json; print(len(json.load(open('/tmp/leaderboard-data/leaderboard_multi.json'))))")"
-
-      - name: Upload to HuggingFace
-        if: ${{ github.event.inputs.dry_run != 'true' }}
-        env:
-          DATASET_WRITE_TOKEN: ${{ secrets.DATASET_WRITE_TOKEN }}
+      - name: Resolve submission directories to sync
+        id: resolve-submissions
         run: |
           python - << 'PYEOF'
-          import os, sys
+          import os
+          import subprocess
           from pathlib import Path
-          from huggingface_hub import HfApi, CommitOperationAdd
 
-          token = os.environ.get("DATASET_WRITE_TOKEN")
-          if not token:
-              print("ERROR: DATASET_WRITE_TOKEN secret is not set.")
-              print("Go to: GitHub repo → Settings → Secrets → Actions → New secret")
-              print("Name: DATASET_WRITE_TOKEN, Value: your HuggingFace write token")
-              sys.exit(1)
+          event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+          before_sha = os.environ.get("BEFORE_SHA", "")
+          current_sha = os.environ.get("GITHUB_SHA", "")
+          submissions_root = Path("submissions")
 
-          repo_id = "intellistream/vllm-hust-benchmark-results"
-          data_dir = Path("/tmp/leaderboard-data")
-          filenames = [
-              "leaderboard_single.json",
-              "leaderboard_multi.json",
-              "leaderboard_compare.json",
-              "last_updated.json",
-          ]
+          submission_dirs: list[str] = []
+          if event_name == "push" and before_sha and current_sha and before_sha != "0000000000000000000000000000000000000000":
+              diff_output = subprocess.check_output(
+                  ["git", "diff", "--name-only", before_sha, current_sha, "--", "submissions"],
+                  text=True,
+              )
+              seen: set[str] = set()
+              for raw_path in diff_output.splitlines():
+                  path = Path(raw_path.strip())
+                  if len(path.parts) < 2 or path.parts[0] != "submissions":
+                      continue
+                  candidate = submissions_root / path.parts[1]
+                  manifest = candidate / "leaderboard_manifest.json"
+                  if manifest.is_file():
+                      resolved = str(candidate.resolve())
+                      if resolved not in seen:
+                          seen.add(resolved)
+                          submission_dirs.append(resolved)
+          else:
+              submission_dirs = [str(path.parent.resolve()) for path in sorted(submissions_root.rglob("leaderboard_manifest.json"))]
 
-          api = HfApi(token=token)
-          operations = []
-          for name in filenames:
-              p = data_dir / name
-              if p.exists():
-                  size_kb = p.stat().st_size / 1024
-                  print(f"  staging {name}  ({size_kb:.1f} KB)")
-                  operations.append(CommitOperationAdd(path_in_repo=name, path_or_fileobj=p))
+          print("Submission dirs to sync:")
+          for item in submission_dirs:
+              print(f"- {item}")
 
-          ref = os.environ.get("GITHUB_REF", "unknown")
-          sha = os.environ.get("GITHUB_SHA", "")[:8]
-          commit = api.create_commit(
-              repo_id=repo_id,
-              repo_type="dataset",
-              revision="main",
-              operations=operations,
-              commit_message=f"chore: update leaderboard from {ref} @ {sha}",
-          )
-          print(f"✅ Uploaded {len(operations)} file(s)")
-          print(f"   commit: {getattr(commit, 'commit_url', commit)}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"count={len(submission_dirs)}\n")
+              fh.write("dirs<<EOF\n")
+              for item in submission_dirs:
+                  fh.write(item + "\n")
+              fh.write("EOF\n")
           PYEOF
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+
+      - name: Sync submissions into HF leaderboard snapshots
+        if: ${{ steps.resolve-submissions.outputs.count != '0' }}
+        env:
+          HF_TOKEN: ${{ secrets.DATASET_WRITE_TOKEN }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "ERROR: DATASET_WRITE_TOKEN secret is not set."
+            exit 1
+          fi
+
+          extra_args=()
+          if [[ "$DRY_RUN" == "true" ]]; then
+            extra_args+=(--dry-run)
+          fi
+
+          while IFS= read -r submission_dir; do
+            [[ -z "$submission_dir" ]] && continue
+            echo "=== syncing $submission_dir ==="
+            PYTHONPATH=src python -m vllm_hust_benchmark.cli sync-submission-to-hf \
+              --submission-dir "$submission_dir" \
+              --aggregate-output-dir /tmp/leaderboard-data \
+              --repo-id intellistream/vllm-hust-benchmark-results \
+              --submissions-prefix submissions-auto \
+              --commit-message "chore: sync benchmark submission and leaderboard data from ${GITHUB_REF} @ ${GITHUB_SHA::8}" \
+              --execute \
+              "${extra_args[@]}"
+          done <<< "${{ steps.resolve-submissions.outputs.dirs }}"
 
       - name: Dry run summary
-        if: ${{ github.event.inputs.dry_run == 'true' }}
+        if: ${{ github.event.inputs.dry_run == 'true' && steps.resolve-submissions.outputs.count != '0' }}
         run: |
           echo "=== DRY RUN: files that would be uploaded ==="
           ls -lh /tmp/leaderboard-data/
+
+      - name: No submissions to sync
+        if: ${{ steps.resolve-submissions.outputs.count == '0' }}
+        run: echo "No submission directories matched this event; nothing to upload."
