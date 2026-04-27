@@ -357,6 +357,7 @@ def sync_submission_to_huggingface(
 ) -> int:
     try:
         from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
+        from vllm_hust_benchmark.hf_publisher import _create_commit_on_branch
     except ImportError:
         print(
             "huggingface_hub is required for HF submission sync. Install with: "
@@ -459,7 +460,8 @@ def sync_submission_to_huggingface(
         except Exception:
             api.create_repo(repo_id=repo_id, repo_type="dataset", private=True, exist_ok=True)
 
-        api.create_commit(
+        _create_commit_on_branch(
+            api,
             repo_id=repo_id,
             repo_type="dataset",
             branch=branch,

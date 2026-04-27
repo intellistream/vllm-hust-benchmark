@@ -44,6 +44,36 @@ def _resolve_token(token: str | None) -> str | None:
     return None  # huggingface_hub falls back to its own cached token
 
 
+def _create_commit_on_branch(
+    api: object,
+    *,
+    repo_id: str,
+    repo_type: str,
+    branch: str,
+    operations: list[object],
+    commit_message: str,
+) -> object:
+    """Support both new (`revision`) and old (`branch`) HF commit APIs."""
+    try:
+        return api.create_commit(
+            repo_id=repo_id,
+            repo_type=repo_type,
+            revision=branch,
+            operations=operations,
+            commit_message=commit_message,
+        )
+    except TypeError as exc:
+        if "revision" not in str(exc):
+            raise
+        return api.create_commit(
+            repo_id=repo_id,
+            repo_type=repo_type,
+            branch=branch,
+            operations=operations,
+            commit_message=commit_message,
+        )
+
+
 def upload_leaderboard_to_hf(
     *,
     data_dir: Path,
@@ -96,7 +126,8 @@ def upload_leaderboard_to_hf(
         for local_path, repo_path in uploads
     ]
 
-    commit_info = api.create_commit(
+    commit_info = _create_commit_on_branch(
+        api,
         repo_id=repo_id,
         repo_type="dataset",
         branch=branch,

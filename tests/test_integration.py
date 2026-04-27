@@ -365,11 +365,18 @@ def test_sync_submission_to_huggingface_merges_existing_submission_and_uploads(
         def create_repo(self, repo_id, repo_type, private, exist_ok):
             return None
 
-        def create_commit(self, repo_id, repo_type, branch, operations, commit_message):
+        def create_commit(
+            self,
+            repo_id,
+            repo_type,
+            operations,
+            commit_message,
+            revision=None,
+        ):
             return {
                 "repo_id": repo_id,
                 "repo_type": repo_type,
-                "branch": branch,
+                "branch": revision,
                 "commit_message": commit_message,
                 "count": len(operations),
             }
